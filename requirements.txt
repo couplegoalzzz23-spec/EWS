@@ -1,0 +1,10 @@
+streamlit
+xarray
+geopandas
+shapely
+pandas
+numpy
+netCDF4
+fiona
+pyproj
+rtree
