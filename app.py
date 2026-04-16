@@ -1,111 +1,109 @@
 import streamlit as st
+import requests
+from PIL import Image
+from io import BytesIO
 import xarray as xr
-import geopandas as gpd
 import numpy as np
-import pandas as pd
-from shapely.geometry import Polygon
-import json
+from datetime import datetime
 
-st.title("🌩️ Early Warning System - Riau")
+# ==============================
+# CONFIG
+# ==============================
+st.set_page_config(page_title="EWS Satelit & Rason", layout="wide")
 
-# =========================
-# UPLOAD FILE
-# =========================
-uploaded_nc = st.file_uploader("Upload file Himawari (.nc)", type=["nc"])
-uploaded_geo = st.file_uploader("Upload shapefile Riau (.geojson)", type=["geojson"])
+st.title("🌩️ Early Warning System (EWS)")
+st.caption("Integrasi Satelit Himawari, NetCDF, dan Rason - BMKG")
 
-if uploaded_nc and uploaded_geo:
+# ==============================
+# AUTO REFRESH (10 menit)
+# ==============================
+st.markdown(
+    """
+    <meta http-equiv="refresh" content="600">
+    """,
+    unsafe_allow_html=True
+)
 
-    # =========================
-    # LOAD DATA
-    # =========================
-    data = xr.open_dataset(uploaded_nc)
+# ==============================
+# AMBIL DATA SATELIT BMKG (PNG)
+# ==============================
+st.subheader("🌐 Citra Satelit Real-Time (BMKG)")
 
-    tbb = data['tbb'].values
-    lat = data['latitude'].values
-    lon = data['longitude'].values
+url = "https://inderaja.bmkg.go.id/IMAGE/HIMA/H08_EH_Indonesia.png"
 
-    # FILTER RIAU
-    lat_min, lat_max = -1.5, 1.5
-    lon_min, lon_max = 100.0, 104.5
+try:
+    response = requests.get(url, timeout=10)
+    img = Image.open(BytesIO(response.content))
+    st.image(img, use_container_width=True)
+    st.success("✅ Data satelit berhasil dimuat")
+except:
+    st.error("❌ Gagal mengambil citra satelit")
 
-    lat_mask = (lat >= lat_min) & (lat <= lat_max)
-    lon_mask = (lon >= lon_min) & (lon <= lon_max)
+# ==============================
+# LOAD NETCDF (TBB)
+# ==============================
+st.subheader("📦 Analisis NetCDF (TBB)")
 
-    tbb = tbb[lat_mask][:, lon_mask]
-    lat = lat[lat_mask]
-    lon = lon[lon_mask]
+try:
+    ds = xr.open_dataset("sample.nc")  # GANTI NAMA FILE
 
-    tbb = tbb - 273.15
+    # Sesuaikan nama variabel (cek print(ds))
+    var_name = list(ds.data_vars)[0]
+    tbb = ds[var_name]
 
-    # GRID
-    polygons = []
-    temps = []
+    tbb_min = float(tbb.min().values)
+    tbb_mean = float(tbb.mean().values)
 
-    for i in range(len(lat)-1):
-        for j in range(len(lon)-1):
-            poly = Polygon([
-                (lon[j], lat[i]),
-                (lon[j], lat[i+1]),
-                (lon[j+1], lat[i+1]),
-                (lon[j+1], lat[i])
-            ])
+    col1, col2 = st.columns(2)
+    col1.metric("TBB Minimum (K)", f"{tbb_min:.2f}")
+    col2.metric("TBB Rata-rata (K)", f"{tbb_mean:.2f}")
 
-            temp = tbb[i, j]
+except Exception as e:
+    st.warning("⚠️ NetCDF belum tersedia / error")
+    tbb_min = 250  # fallback aman
 
-            if not np.isnan(temp):
-                polygons.append(poly)
-                temps.append(temp)
+# ==============================
+# INPUT DATA RASON
+# ==============================
+st.subheader("🎈 Data Radiosonde (Rason)")
 
-    df = pd.DataFrame({'temperature': temps, 'geometry': polygons})
-    gdf = gpd.GeoDataFrame(df, geometry='geometry', crs="EPSG:4326")
+col3, col4 = st.columns(2)
 
-    # LOAD SHAPEFILE
-    kec = gpd.read_file(uploaded_geo)
+CAPE = col3.number_input("CAPE (J/kg)", value=1000)
+LI = col4.number_input("Lifted Index (LI)", value=-3)
 
-    results = []
+# ==============================
+# LOGIKA EWS
+# ==============================
+st.subheader("🚨 Status Early Warning System")
 
-    for _, row in kec.iterrows():
-        geom = row.geometry
-        name = row['NAME_3']
+def ews_status(tbb, cape, li):
+    if (tbb < 203) and (cape > 1000) and (li < -3):
+        return "SIAGA 🔴", "Potensi konveksi kuat (CB / hujan lebat)"
+    elif (tbb < 220) or (cape > 500):
+        return "WASPADA 🟡", "Potensi awan konvektif"
+    else:
+        return "AMAN 🟢", "Kondisi relatif stabil"
 
-        inter = gdf[gdf.intersects(geom)]
+status, desc = ews_status(tbb_min, CAPE, LI)
 
-        if not inter.empty:
-            min_temp = inter['temperature'].min()
+st.markdown(f"## {status}")
+st.info(desc)
 
-            if min_temp <= -70:
-                status = "EKSTREM"
-            elif min_temp <= -60:
-                status = "WASPADA"
-            else:
-                status = "AMAN"
+# ==============================
+# INFO TAMBAHAN
+# ==============================
+st.subheader("📊 Informasi Sistem")
 
-            results.append({
-                "Kecamatan": name,
-                "Suhu": round(min_temp, 2),
-                "Status": status
-            })
+st.write(f"""
+- **Sumber Satelit:** BMKG Himawari  
+- **Analisis:** Brightness Temperature (TBB)  
+- **Rason:** CAPE & Lifted Index  
+- **Update:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+""")
 
-    df_result = pd.DataFrame(results)
-
-    st.success("✅ Analisis selesai!")
-    st.dataframe(df_result)
-
-    # DOWNLOAD
-    geojson = {
-        "type": "FeatureCollection",
-        "features": []
-    }
-
-    for r in results:
-        geojson["features"].append({
-            "type": "Feature",
-            "properties": r
-        })
-
-    st.download_button(
-        "📥 Download hasil",
-        json.dumps(geojson),
-        file_name="riau_warning.geojson"
-    )
+# ==============================
+# FOOTER
+# ==============================
+st.markdown("---")
+st.caption("Developed for Meteorological Early Warning System Research")
