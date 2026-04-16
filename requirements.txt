@@ -5,3 +5,4 @@ xarray
 netcdf4
 folium
 streamlit-folium
+shapely
