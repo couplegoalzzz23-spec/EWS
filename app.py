@@ -17,7 +17,7 @@ except:
 # CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌩️ SkyAlert – Early Warning System")
+st.title("SkyAlert – Early Warning System")
 
 # =========================
 # LOAD GEOJSON (SAFE)
@@ -33,7 +33,7 @@ def load_geojson():
 geojson_data = load_geojson()
 
 # =========================
-# GET PROVINCE (SAFE)
+# GET PROVINCE
 # =========================
 @st.cache_data
 def get_province(lat, lon):
@@ -52,7 +52,7 @@ def get_province(lat, lon):
     return "Luar Indonesia"
 
 # =========================
-# DATA (SIMULASI AMAN)
+# DATA
 # =========================
 np.random.seed(42)
 
@@ -80,10 +80,10 @@ df["score"] = (
 )
 
 def classify(s):
-    if s < 0.3: return "🟢 Aman"
-    elif s < 0.6: return "🟡 Waspada"
-    elif s < 0.8: return "🟠 Siaga"
-    else: return "🔴 Ekstrem"
+    if s < 0.3: return "Aman"
+    elif s < 0.6: return "Waspada"
+    elif s < 0.8: return "Siaga"
+    else: return "Ekstrem"
 
 df["status"] = df["score"].apply(classify)
 
@@ -96,14 +96,17 @@ df_sample["province"] = df_sample.apply(
 )
 
 # =========================
-# EXPLANATION
+# EXPLANATION BERDASARKAN STATUS
 # =========================
-def explain(r):
-    alasan = []
-    if r["cape"] > 2500: alasan.append("CAPE tinggi")
-    if r["ctt"] < -70: alasan.append("CB kuat")
-    if r["rh"] > 80: alasan.append("Lembap")
-    return ", ".join(alasan)
+def explain_status(r):
+    if r["status"] == "Ekstrem":
+        return "CAPE > 2500 dan CTT < -70°C menunjukkan awan Cumulonimbus kuat dan atmosfer sangat labil"
+    elif r["status"] == "Siaga":
+        return "CAPE > 1500 dan CTT < -60°C menunjukkan konveksi kuat berpotensi hujan lebat"
+    elif r["status"] == "Waspada":
+        return "CAPE > 500 menunjukkan awal pertumbuhan awan konvektif"
+    else:
+        return "Atmosfer relatif stabil dengan energi konveksi rendah"
 
 # =========================
 # WAKTU
@@ -111,32 +114,32 @@ def explain(r):
 now = datetime.now()
 time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-st.info(f"⏱️ {time_str} WIB")
+st.info(f"Waktu observasi: {time_str} WIB")
 
 # =========================
 # LEGENDA
 # =========================
-st.subheader("📘 Legenda Status")
+st.subheader("Legenda Status")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.markdown("🟢 **Aman**  \nAtmosfer stabil")
-col2.markdown("🟡 **Waspada**  \nAwal konveksi")
-col3.markdown("🟠 **Siaga**  \nPotensi hujan lebat")
-col4.markdown("🔴 **Ekstrem**  \nBadai / CB kuat")
+col1.markdown("Aman – atmosfer stabil")
+col2.markdown("Waspada – awal konveksi")
+col3.markdown("Siaga – potensi hujan lebat")
+col4.markdown("Ekstrem – badai / CB kuat")
 
 # =========================
-# MAP (STATIC - ANTI GERAK)
+# MAP (STATIC)
 # =========================
-st.subheader("🗺️ Peta Risiko Cuaca")
+st.subheader("Peta Risiko Cuaca")
 
 def create_map(df):
     m = folium.Map(location=[-2,118], zoom_start=5)
 
     color = {
-        "🟢 Aman":"green",
-        "🟡 Waspada":"orange",
-        "🟠 Siaga":"darkorange",
-        "🔴 Ekstrem":"red"
+        "Aman":"green",
+        "Waspada":"orange",
+        "Siaga":"darkorange",
+        "Ekstrem":"red"
     }
 
     for _, r in df.iterrows():
@@ -147,14 +150,15 @@ def create_map(df):
             fill=True,
             fill_opacity=0.7,
             popup=f"""
-            📍 {r['province']}<br>
-            Lat: {r['lat']:.2f}, Lon: {r['lon']:.2f}<br>
-            🚨 {r['status']}<br>
-            ⏱️ {time_str}<br>
-            📊 Score: {r['score']:.2f}<br>
-            CAPE: {r['cape']:.0f}<br>
-            CTT: {r['ctt']:.1f}°C<br>
-            🧠 {explain(r)}
+            Lokasi: {r['province']}<br>
+            Koordinat: {r['lat']:.2f}, {r['lon']:.2f}<br>
+            Status: {r['status']}<br>
+            Waktu: {time_str}<br>
+            Score: {r['score']:.2f}<br>
+            CAPE: {r['cape']:.0f} J/kg<br>
+            CTT: {r['ctt']:.1f} °C<br><br>
+            Keterangan:<br>
+            {explain_status(r)}
             """
         ).add_to(m)
 
@@ -165,7 +169,7 @@ components.html(create_map(df_sample), height=520)
 # =========================
 # DATA TABLE
 # =========================
-st.subheader("📊 Data Detail Lokasi")
+st.subheader("Data Detail")
 
 df_display = df_sample[[
     "province", "lat", "lon", "status", "score", "cape", "ctt", "rh", "rain"
@@ -178,10 +182,10 @@ st.dataframe(df_display, use_container_width=True)
 # =========================
 # SUMMARY
 # =========================
-st.subheader("📊 Ringkasan")
+st.subheader("Ringkasan")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total", len(df))
-col2.metric("Ekstrem", (df["status"]=="🔴 Ekstrem").sum())
-col3.metric("Siaga", (df["status"]=="🟠 Siaga").sum())
-col4.metric("Aman", (df["status"]=="🟢 Aman").sum())
+col1.metric("Total Data", len(df))
+col2.metric("Ekstrem", (df["status"]=="Ekstrem").sum())
+col3.metric("Siaga", (df["status"]=="Siaga").sum())
+col4.metric("Aman", (df["status"]=="Aman").sum())
