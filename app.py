@@ -11,10 +11,10 @@ from datetime import datetime
 # CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌩️ SkyAlert – EWS Wilayah Indonesia")
+st.title("🌩️ SkyAlert – Early Warning System")
 
 # =========================
-# LOAD GEOJSON
+# LOAD GEOJSON (PROVINSI)
 # =========================
 @st.cache_data
 def load_geojson():
@@ -24,21 +24,19 @@ def load_geojson():
 geojson_data = load_geojson()
 
 # =========================
-# FUNCTION: GET PROVINCE
+# GET PROVINCE
 # =========================
 @st.cache_data
 def get_province(lat, lon):
     point = Point(lon, lat)
-
     for feature in geojson_data["features"]:
         polygon = shape(feature["geometry"])
         if polygon.contains(point):
             return feature["properties"].get("name", "Unknown")
-
     return "Luar Indonesia"
 
 # =========================
-# GENERATE DATA
+# DATA (SIMULASI / REAL BISA MASUK SINI)
 # =========================
 np.random.seed(42)
 
@@ -73,7 +71,7 @@ def classify(s):
 df["status"] = df["score"].apply(classify)
 
 # =========================
-# ADD PROVINCE
+# SAMPLE + PROVINSI
 # =========================
 df_sample = df.sample(100).copy()
 df_sample["province"] = df_sample.apply(
@@ -99,9 +97,21 @@ time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 st.info(f"⏱️ {time_str} WIB")
 
 # =========================
-# MAP (STATIC)
+# LEGENDA (TAMBAHAN)
 # =========================
-st.subheader("🗺️ Peta Risiko + Wilayah Indonesia")
+st.subheader("📘 Legenda Status")
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.markdown("🟢 **Aman**  \nAtmosfer stabil")
+col2.markdown("🟡 **Waspada**  \nAwal konveksi")
+col3.markdown("🟠 **Siaga**  \nPotensi hujan lebat")
+col4.markdown("🔴 **Ekstrem**  \nBadai / CB kuat")
+
+# =========================
+# MAP (STATIC - TIDAK GERAK)
+# =========================
+st.subheader("🗺️ Peta Risiko Cuaca")
 
 def create_map(df):
     m = folium.Map(location=[-2,118], zoom_start=5)
@@ -125,6 +135,9 @@ def create_map(df):
             Lat: {r['lat']:.2f}, Lon: {r['lon']:.2f}<br>
             🚨 {r['status']}<br>
             ⏱️ {time_str}<br>
+            📊 Score: {r['score']:.2f}<br>
+            CAPE: {r['cape']:.0f}<br>
+            CTT: {r['ctt']:.1f}°C<br>
             🧠 {explain(r)}
             """
         ).add_to(m)
@@ -132,6 +145,19 @@ def create_map(df):
     return m._repr_html_()
 
 components.html(create_map(df_sample), height=520)
+
+# =========================
+# DATA TABLE (TAMBAHAN)
+# =========================
+st.subheader("📊 Data Detail Lokasi")
+
+df_display = df_sample[[
+    "province", "lat", "lon", "status", "score", "cape", "ctt", "rh", "rain"
+]].copy()
+
+df_display = df_display.sort_values("score", ascending=False)
+
+st.dataframe(df_display, use_container_width=True)
 
 # =========================
 # SUMMARY
