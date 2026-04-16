@@ -1,109 +1,238 @@
 import streamlit as st
-import requests
-from PIL import Image
-from io import BytesIO
-import xarray as xr
 import numpy as np
-from datetime import datetime
+import pandas as pd
+import folium
+import xarray as xr
+from streamlit_folium import st_folium
 
-# ==============================
-# CONFIG
-# ==============================
-st.set_page_config(page_title="EWS Satelit & Rason", layout="wide")
+# =========================
+# ⚙️ CONFIG
+# =========================
+st.set_page_config(page_title="SkyAlert - EWS", layout="wide")
 
-st.title("🌩️ Early Warning System (EWS)")
-st.caption("Integrasi Satelit Himawari, NetCDF, dan Rason - BMKG")
+st.title("🌩️ SkyAlert – Early Warning System")
+st.caption("Satellite-Based Explainable Meteorological EWS | Resti Maulina C.C")
 
-# ==============================
-# AUTO REFRESH (10 menit)
-# ==============================
-st.markdown(
-    """
-    <meta http-equiv="refresh" content="600">
-    """,
-    unsafe_allow_html=True
-)
+# =========================
+# 🧪 FALLBACK DATA (AMAN)
+# =========================
+def generate_data(n=1000):
+    np.random.seed(7)
+    df = pd.DataFrame({
+        "lat": np.random.uniform(-11, 6, n),
+        "lon": np.random.uniform(95, 141, n),
+        "cape": np.random.uniform(100, 4000, n),
+        "cloud_top_temp": np.random.uniform(-90, 20, n),
+        "humidity": np.random.uniform(30, 100, n),
+        "rain_rate": np.random.uniform(0, 100, n)
+    })
+    return df
 
-# ==============================
-# AMBIL DATA SATELIT BMKG (PNG)
-# ==============================
-st.subheader("🌐 Citra Satelit Real-Time (BMKG)")
+# =========================
+# 📦 LOAD NETCDF (REAL DATA)
+# =========================
+@st.cache_data(ttl=600)
+def load_real_data():
 
-url = "https://inderaja.bmkg.go.id/IMAGE/HIMA/H08_EH_Indonesia.png"
+    try:
+        ds = xr.open_dataset("H09_B07_Indonesia_202604140020.nc")
 
-try:
-    response = requests.get(url, timeout=10)
-    img = Image.open(BytesIO(response.content))
-    st.image(img, use_container_width=True)
-    st.success("✅ Data satelit berhasil dimuat")
-except:
-    st.error("❌ Gagal mengambil citra satelit")
+        var_name = list(ds.data_vars)[0]
+        data = ds[var_name]
 
-# ==============================
-# LOAD NETCDF (TBB)
-# ==============================
-st.subheader("📦 Analisis NetCDF (TBB)")
+        if "time" in data.dims:
+            data = data.isel(time=0)
 
-try:
-    ds = xr.open_dataset("sample.nc")  # GANTI NAMA FILE
+        lat_name = [c for c in ds.coords if "lat" in c.lower()][0]
+        lon_name = [c for c in ds.coords if "lon" in c.lower()][0]
 
-    # Sesuaikan nama variabel (cek print(ds))
-    var_name = list(ds.data_vars)[0]
-    tbb = ds[var_name]
+        lat = ds[lat_name].values
+        lon = ds[lon_name].values
 
-    tbb_min = float(tbb.min().values)
-    tbb_mean = float(tbb.mean().values)
+        tbb = data.values
 
-    col1, col2 = st.columns(2)
-    col1.metric("TBB Minimum (K)", f"{tbb_min:.2f}")
-    col2.metric("TBB Rata-rata (K)", f"{tbb_mean:.2f}")
+        # Kelvin → Celsius
+        if np.nanmean(tbb) > 200:
+            tbb = tbb - 273.15
 
-except Exception as e:
-    st.warning("⚠️ NetCDF belum tersedia / error")
-    tbb_min = 250  # fallback aman
+        lat_grid, lon_grid = np.meshgrid(lat, lon, indexing='ij')
 
-# ==============================
-# INPUT DATA RASON
-# ==============================
-st.subheader("🎈 Data Radiosonde (Rason)")
+        df = pd.DataFrame({
+            "lat": lat_grid.flatten(),
+            "lon": lon_grid.flatten(),
+            "cloud_top_temp": tbb.flatten()
+        })
 
-col3, col4 = st.columns(2)
+        df = df.dropna()
 
-CAPE = col3.number_input("CAPE (J/kg)", value=1000)
-LI = col4.number_input("Lifted Index (LI)", value=-3)
+        # =========================
+        # 🔥 PARAMETER TURUNAN (FISIKA)
+        # =========================
+        df["cape"] = np.interp(df["cloud_top_temp"], [-80, 20], [3000, 100])
+        df["humidity"] = np.interp(df["cloud_top_temp"], [-80, 20], [95, 40])
+        df["rain_rate"] = np.interp(df["cloud_top_temp"], [-80, 20], [100, 0])
 
-# ==============================
-# LOGIKA EWS
-# ==============================
-st.subheader("🚨 Status Early Warning System")
+        # =========================
+        # ⚠️ OPTIMASI
+        # =========================
+        if len(df) > 2500:
+            df = df.sample(2500, random_state=42)
 
-def ews_status(tbb, cape, li):
-    if (tbb < 203) and (cape > 1000) and (li < -3):
-        return "SIAGA 🔴", "Potensi konveksi kuat (CB / hujan lebat)"
-    elif (tbb < 220) or (cape > 500):
-        return "WASPADA 🟡", "Potensi awan konvektif"
+        return df
+
+    except Exception as e:
+        st.warning(f"⚠️ Gagal load NetCDF, fallback ke simulasi: {e}")
+        return generate_data()
+
+# =========================
+# LOAD DATA
+# =========================
+df = load_real_data()
+
+# =========================
+# 🧮 NORMALISASI
+# =========================
+def norm(x, min_v, max_v):
+    return np.clip((x - min_v) / (max_v - min_v), 0, 1)
+
+# =========================
+# ⚡ METEOROLOGICAL INDEX
+# =========================
+def compute_score(row):
+    cape_n = norm(row["cape"], 0, 4000)
+    ctt_n = norm(abs(row["cloud_top_temp"]), 0, 90)
+    hum_n = norm(row["humidity"], 0, 100)
+    rain_n = norm(row["rain_rate"], 0, 100)
+
+    return (0.4 * cape_n) + (0.3 * ctt_n) + (0.2 * hum_n) + (0.1 * rain_n)
+
+df["score"] = df.apply(compute_score, axis=1)
+
+# =========================
+# 🚨 CLASSIFICATION
+# =========================
+def classify(score):
+    if score < 0.30:
+        return "🟢 Aman"
+    elif score < 0.60:
+        return "🟡 Waspada"
+    elif score < 0.80:
+        return "🟠 Siaga"
     else:
-        return "AMAN 🟢", "Kondisi relatif stabil"
+        return "🔴 Ekstrem"
 
-status, desc = ews_status(tbb_min, CAPE, LI)
+df["status"] = df["score"].apply(classify)
 
-st.markdown(f"## {status}")
-st.info(desc)
+# =========================
+# 🧠 EXPLANATION ENGINE
+# =========================
+def explain(row):
+    alasan = []
 
-# ==============================
-# INFO TAMBAHAN
-# ==============================
-st.subheader("📊 Informasi Sistem")
+    if row["cape"] > 2000:
+        alasan.append("CAPE tinggi → atmosfer sangat labil")
+    elif row["cape"] > 1000:
+        alasan.append("CAPE sedang → potensi konveksi")
 
-st.write(f"""
-- **Sumber Satelit:** BMKG Himawari  
-- **Analisis:** Brightness Temperature (TBB)  
-- **Rason:** CAPE & Lifted Index  
-- **Update:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    if row["cloud_top_temp"] < -60:
+        alasan.append("Awan sangat tinggi (CB kuat)")
+    elif row["cloud_top_temp"] < -40:
+        alasan.append("Awan konvektif berkembang")
+
+    if row["humidity"] > 80:
+        alasan.append("Kelembapan tinggi")
+
+    if row["rain_rate"] > 40:
+        alasan.append("Hujan intensitas tinggi")
+
+    return alasan
+
+# =========================
+# 📘 SIDEBAR
+# =========================
+st.sidebar.header("📘 Penjelasan Threshold")
+
+st.sidebar.markdown("""
+🟢 Aman: stabil  
+🟡 Waspada: awal konveksi  
+🟠 Siaga: labil  
+🔴 Ekstrem: badai kuat  
 """)
 
-# ==============================
-# FOOTER
-# ==============================
-st.markdown("---")
-st.caption("Developed for Meteorological Early Warning System Research")
+status_filter = st.sidebar.multiselect(
+    "Filter Status",
+    df["status"].unique(),
+    default=list(df["status"].unique())
+)
+
+filtered = df[df["status"].isin(status_filter)]
+
+# =========================
+# 📊 METRIC DASHBOARD
+# =========================
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Total Area", len(df))
+col2.metric("Ekstrem", (df["status"] == "🔴 Ekstrem").sum())
+col3.metric("Siaga", (df["status"] == "🟠 Siaga").sum())
+col4.metric("Aman", (df["status"] == "🟢 Aman").sum())
+
+# =========================
+# 🗺️ MAP
+# =========================
+st.subheader("🗺️ Peta Risiko Cuaca")
+
+m = folium.Map(location=[-2, 118], zoom_start=5)
+
+color_map = {
+    "🟢 Aman": "green",
+    "🟡 Waspada": "orange",
+    "🟠 Siaga": "darkorange",
+    "🔴 Ekstrem": "red"
+}
+
+for _, r in filtered.iterrows():
+    explanation = explain(r)
+
+    folium.CircleMarker(
+        location=[r["lat"], r["lon"]],
+        radius=5,
+        color=color_map[r["status"]],
+        fill=True,
+        fill_opacity=0.7,
+        popup=folium.Popup(
+            f"""
+            <b>Status:</b> {r['status']}<br>
+            <b>Score:</b> {r['score']:.2f}<br><br>
+
+            CAPE: {r['cape']:.0f} J/kg<br>
+            CTT: {r['cloud_top_temp']:.1f}°C<br>
+            RH: {r['humidity']:.0f}%<br>
+            Rain: {r['rain_rate']:.1f} mm/h<br><br>
+
+            <b>Kenapa:</b><br>
+            {"<br>".join(explanation)}
+            """,
+            max_width=300
+        )
+    ).add_to(m)
+
+st_folium(m, width=1200, height=520)
+
+# =========================
+# 📊 TABLE
+# =========================
+st.subheader("📊 Data Detail")
+
+filtered = filtered.copy()
+filtered["explanation"] = filtered.apply(explain, axis=1)
+
+st.dataframe(filtered.sort_values("score", ascending=False), use_container_width=True)
+
+# =========================
+# ⏱️ AUTO REFRESH
+# =========================
+st.markdown(
+    "<meta http-equiv='refresh' content='600'>",
+    unsafe_allow_html=True
+)
