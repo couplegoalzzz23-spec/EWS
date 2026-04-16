@@ -159,8 +159,7 @@ st.info(f"Update terakhir: {now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
 # =========================
 # STATUS DOMINAN
 # =========================
-status_counts = df["status"].value_counts()
-dominant_status = status_counts.idxmax()
+dominant_status = df["status"].value_counts().idxmax()
 
 st.subheader("🚨 Status Saat Ini")
 st.success(f"{dominant_status} pada {now.strftime('%H:%M WIB')}")
@@ -197,11 +196,22 @@ def simulate_history(df):
 st.table(simulate_history(df))
 
 # =========================
-# MAP
+# MAP STABLE
 # =========================
-st.subheader("🗺️ Peta Risiko")
+st.subheader("🗺️ Peta Risiko Cuaca")
 
-m = folium.Map(location=[-2,118], zoom_start=5)
+# simpan posisi map
+if "map_center" not in st.session_state:
+    st.session_state.map_center = [-2, 118]
+
+if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 5
+
+m = folium.Map(
+    location=st.session_state.map_center,
+    zoom_start=st.session_state.map_zoom,
+    control_scale=True
+)
 
 color_map = {
     "🟢 Aman":"green",
@@ -213,13 +223,31 @@ color_map = {
 for _, r in df.iterrows():
     folium.CircleMarker(
         [r["lat"], r["lon"]],
-        radius=4,
+        radius=5,
         color=color_map[r["status"]],
         fill=True,
-        fill_opacity=0.7
+        fill_opacity=0.7,
+        popup=f"""
+        <b>Status:</b> {r['status']}<br>
+        <b>Score:</b> {r['score']:.2f}<br>
+        CAPE: {r['cape']:.0f}<br>
+        CTT: {r['cloud_top_temp']:.1f}°C<br>
+        RH: {r['humidity']:.0f}%<br>
+        Rain: {r['rain_rate']:.1f}
+        """
     ).add_to(m)
 
-st_folium(m, width=1200, height=520)
+map_data = st_folium(m, width=1200, height=520)
+
+# simpan posisi terakhir (BIAR GA LONCAT)
+if map_data and map_data.get("center"):
+    st.session_state.map_center = [
+        map_data["center"]["lat"],
+        map_data["center"]["lng"]
+    ]
+
+if map_data and map_data.get("zoom"):
+    st.session_state.map_zoom = map_data["zoom"]
 
 # =========================
 # TREND
@@ -231,10 +259,4 @@ st.line_chart(df["cloud_top_temp"].rolling(50).mean())
 # TABLE
 # =========================
 st.subheader("📊 Data Detail")
-
 st.dataframe(df.sort_values("score", ascending=False), use_container_width=True)
-
-# =========================
-# AUTO REFRESH
-# =========================
-st.markdown("<meta http-equiv='refresh' content='600'>", unsafe_allow_html=True)
