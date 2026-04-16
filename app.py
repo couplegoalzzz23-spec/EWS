@@ -4,8 +4,9 @@ import pandas as pd
 import folium
 import xarray as xr
 from streamlit_folium import st_folium
+from datetime import datetime, timedelta
 
-# optional (biar tidak error kalau belum install)
+# optional image
 try:
     import requests
     from PIL import Image
@@ -20,7 +21,7 @@ except:
 st.set_page_config(page_title="SkyAlert - EWS", layout="wide")
 
 st.title("🌩️ SkyAlert – Early Warning System")
-st.caption("Explainable Satellite-Based Meteorological EWS | Resti Maulina C.C")
+st.caption("Explainable Spatio-Temporal Meteorological EWS | Resti Maulina C.C")
 
 # =========================
 # SIDEBAR LEGEND
@@ -44,7 +45,7 @@ st.sidebar.markdown("""
 # =========================
 # 🌐 SATELIT BMKG
 # =========================
-st.subheader("🌐 Citra Satelit BMKG (Real-Time)")
+st.subheader("🌐 Citra Satelit BMKG")
 
 if IMG_OK:
     try:
@@ -53,14 +54,13 @@ if IMG_OK:
         img = Image.open(BytesIO(res.content))
         st.image(img, use_container_width=True)
     except:
-        st.warning("⚠️ Gagal load citra BMKG")
+        st.warning("⚠️ Gagal load citra")
 
 # =========================
-# 📦 LOAD NETCDF (UPLOAD / FILE / FALLBACK)
+# 📦 UPLOAD NETCDF
 # =========================
 st.subheader("📦 Data NetCDF")
-
-uploaded_file = st.file_uploader("Upload file NetCDF (.nc)", type=["nc"])
+uploaded_file = st.file_uploader("Upload file .nc", type=["nc"])
 
 def load_nc(file):
     try:
@@ -94,17 +94,16 @@ def load_nc(file):
         return df
 
     except Exception as e:
-        st.error(f"❌ Gagal baca NetCDF: {e}")
+        st.error(f"❌ NetCDF error: {e}")
         return None
 
 # =========================
-# DATA HANDLING (ANTI ERROR)
+# DATA HANDLING
 # =========================
-if uploaded_file is not None:
+if uploaded_file:
     df = load_nc(uploaded_file)
-
 else:
-    st.warning("⚠️ Tidak ada file → menggunakan data simulasi")
+    st.warning("⚠️ Menggunakan data simulasi")
     df = pd.DataFrame({
         "lat": np.random.uniform(-11, 6, 500),
         "lon": np.random.uniform(95, 141, 500),
@@ -150,36 +149,57 @@ def classify(s):
 df["status"] = df["score"].apply(classify)
 
 # =========================
-# EXPLAIN
+# ⏱️ WAKTU
 # =========================
-def explain(r):
-    alasan = []
+now = datetime.now()
 
-    if r["cape"] > 2500:
-        alasan.append("Atmosfer sangat labil")
-    if r["cloud_top_temp"] < -70:
-        alasan.append("Awan Cumulonimbus kuat")
-    if r["humidity"] > 80:
-        alasan.append("Udara sangat lembap")
-    if r["rain_rate"] > 50:
-        alasan.append("Hujan sangat lebat")
-
-    return alasan
+st.subheader("⏱️ Informasi Waktu")
+st.info(f"Update terakhir: {now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
 
 # =========================
-# METRICS
+# STATUS DOMINAN
 # =========================
-col1, col2, col3, col4 = st.columns(4)
+status_counts = df["status"].value_counts()
+dominant_status = status_counts.idxmax()
 
-col1.metric("Total Data", len(df))
-col2.metric("Ekstrem", (df["status"]=="🔴 Ekstrem").sum())
-col3.metric("Siaga", (df["status"]=="🟠 Siaga").sum())
-col4.metric("Aman", (df["status"]=="🟢 Aman").sum())
+st.subheader("🚨 Status Saat Ini")
+st.success(f"{dominant_status} pada {now.strftime('%H:%M WIB')}")
+
+# =========================
+# RIWAYAT STATUS
+# =========================
+st.subheader("📈 Riwayat Status")
+
+def simulate_history(df):
+    history = []
+    base = datetime.now()
+
+    for i in range(4):
+        temp = df.copy()
+        temp["cloud_top_temp"] += np.random.uniform(-3, 3, len(temp))
+
+        temp["score"] = (
+            0.4 * norm(temp["cape"], 0, 4000) +
+            0.3 * norm(abs(temp["cloud_top_temp"]), 0, 90) +
+            0.2 * norm(temp["humidity"], 0, 100) +
+            0.1 * norm(temp["rain_rate"], 0, 100)
+        )
+
+        temp["status"] = temp["score"].apply(classify)
+
+        history.append({
+            "Waktu": (base - timedelta(minutes=(3-i)*10)).strftime("%H:%M"),
+            "Status": temp["status"].value_counts().idxmax()
+        })
+
+    return pd.DataFrame(history)
+
+st.table(simulate_history(df))
 
 # =========================
 # MAP
 # =========================
-st.subheader("🗺️ Peta Risiko Cuaca")
+st.subheader("🗺️ Peta Risiko")
 
 m = folium.Map(location=[-2,118], zoom_start=5)
 
@@ -196,32 +216,21 @@ for _, r in df.iterrows():
         radius=4,
         color=color_map[r["status"]],
         fill=True,
-        fill_opacity=0.7,
-        popup=f"""
-        Status: {r['status']}<br>
-        Score: {r['score']:.2f}<br>
-        CAPE: {r['cape']:.0f}<br>
-        CTT: {r['cloud_top_temp']:.1f}°C<br>
-        RH: {r['humidity']:.0f}%<br>
-        Rain: {r['rain_rate']:.1f}
-        """
+        fill_opacity=0.7
     ).add_to(m)
 
 st_folium(m, width=1200, height=520)
 
 # =========================
-# TEMPORAL (SIMPLE)
+# TREND
 # =========================
 st.subheader("⏱️ Tren Awan")
-
 st.line_chart(df["cloud_top_temp"].rolling(50).mean())
 
 # =========================
 # TABLE
 # =========================
 st.subheader("📊 Data Detail")
-
-df["explanation"] = df.apply(explain, axis=1)
 
 st.dataframe(df.sort_values("score", ascending=False), use_container_width=True)
 
