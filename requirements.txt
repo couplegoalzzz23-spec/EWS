@@ -1,10 +1,7 @@
 streamlit
+requests
+pillow
 xarray
-geopandas
-shapely
-pandas
+netcdf4
 numpy
-netCDF4
-fiona
-pyproj
-rtree
+matplotlib
