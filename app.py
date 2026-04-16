@@ -2,9 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import folium
-import requests
-from PIL import Image
-from io import BytesIO
+import json
+from shapely.geometry import shape, Point
 import streamlit.components.v1 as components
 from datetime import datetime
 
@@ -12,46 +11,42 @@ from datetime import datetime
 # CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌩️ SkyAlert – Auto Update EWS")
+st.title("🌩️ SkyAlert – EWS Wilayah Indonesia")
 
 # =========================
-# REFRESH BUTTON (AMAN)
+# LOAD GEOJSON
 # =========================
-if st.button("🔄 Update Data Sekarang"):
-    st.cache_data.clear()
-    st.rerun()
+@st.cache_data
+def load_geojson():
+    with open("indonesia_province.geojson") as f:
+        return json.load(f)
+
+geojson_data = load_geojson()
 
 # =========================
-# AMBIL CITRA SATELIT
+# FUNCTION: GET PROVINCE
 # =========================
-@st.cache_data(ttl=600)  # update tiap 10 menit
-def get_satellite():
-    url = "https://inderaja.bmkg.go.id/IMAGE/HIMA/H08_EH_Indonesia.png"
-    res = requests.get(url, timeout=10)
-    return Image.open(BytesIO(res.content))
+@st.cache_data
+def get_province(lat, lon):
+    point = Point(lon, lat)
 
-st.subheader("🌐 Citra Satelit BMKG")
-try:
-    img = get_satellite()
-    st.image(img, use_container_width=True)
-except:
-    st.warning("Gagal mengambil citra")
+    for feature in geojson_data["features"]:
+        polygon = shape(feature["geometry"])
+        if polygon.contains(point):
+            return feature["properties"].get("name", "Unknown")
+
+    return "Luar Indonesia"
 
 # =========================
-# GENERATE DATA DARI CITRA (SIMULASI ILMIAH)
+# GENERATE DATA
 # =========================
-@st.cache_data(ttl=600)
-def generate_data(n=300):
-    np.random.seed(42)
+np.random.seed(42)
 
-    df = pd.DataFrame({
-        "lat": np.random.uniform(-11, 6, n),
-        "lon": np.random.uniform(95, 141, n),
-        "ctt": np.random.uniform(-80, 10, n)
-    })
-    return df
-
-df = generate_data()
+df = pd.DataFrame({
+    "lat": np.random.uniform(-11, 6, 300),
+    "lon": np.random.uniform(95, 141, 300),
+    "ctt": np.random.uniform(-80, 10, 300)
+})
 
 # =========================
 # PARAMETER
@@ -78,6 +73,14 @@ def classify(s):
 df["status"] = df["score"].apply(classify)
 
 # =========================
+# ADD PROVINCE
+# =========================
+df_sample = df.sample(100).copy()
+df_sample["province"] = df_sample.apply(
+    lambda r: get_province(r["lat"], r["lon"]), axis=1
+)
+
+# =========================
 # EXPLANATION
 # =========================
 def explain(r):
@@ -93,12 +96,12 @@ def explain(r):
 now = datetime.now()
 time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-st.info(f"⏱️ Update: {time_str} WIB")
+st.info(f"⏱️ {time_str} WIB")
 
 # =========================
-# MAP (STATIC - TIDAK GERAK)
+# MAP (STATIC)
 # =========================
-st.subheader("🗺️ Peta Risiko (Auto Update)")
+st.subheader("🗺️ Peta Risiko + Wilayah Indonesia")
 
 def create_map(df):
     m = folium.Map(location=[-2,118], zoom_start=5)
@@ -110,7 +113,7 @@ def create_map(df):
         "🔴 Ekstrem":"red"
     }
 
-    for _, r in df.sample(200).iterrows():
+    for _, r in df.iterrows():
         folium.CircleMarker(
             [r["lat"], r["lon"]],
             radius=5,
@@ -118,16 +121,17 @@ def create_map(df):
             fill=True,
             fill_opacity=0.7,
             popup=f"""
+            📍 {r['province']}<br>
             Lat: {r['lat']:.2f}, Lon: {r['lon']:.2f}<br>
-            {r['status']}<br>
-            {time_str}<br>
-            {explain(r)}
+            🚨 {r['status']}<br>
+            ⏱️ {time_str}<br>
+            🧠 {explain(r)}
             """
         ).add_to(m)
 
     return m._repr_html_()
 
-components.html(create_map(df), height=520)
+components.html(create_map(df_sample), height=520)
 
 # =========================
 # SUMMARY
