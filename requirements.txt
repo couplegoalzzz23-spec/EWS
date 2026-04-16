@@ -1,7 +1,7 @@
 streamlit
-requests
-pillow
+numpy
+pandas
 xarray
 netcdf4
-numpy
-matplotlib
+folium
+streamlit-folium
