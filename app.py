@@ -4,20 +4,23 @@ import pandas as pd
 import folium
 import xarray as xr
 from streamlit_folium import st_folium
-from datetime import datetime, timedelta
+from datetime import datetime
 
+# =========================
+# CONFIG
+# =========================
 st.set_page_config(layout="wide")
-
 st.title("🌩️ SkyAlert – Early Warning System")
 
 # =========================
-# UPLOAD DATA
+# UPLOAD NETCDF
 # =========================
-uploaded_file = st.file_uploader("Upload NetCDF (.nc)", type=["nc"])
+uploaded_file = st.file_uploader("📦 Upload Data NetCDF (.nc)", type=["nc"])
 
 def load_nc(file):
     try:
         ds = xr.open_dataset(file)
+
         var = list(ds.data_vars)[0]
         data = ds[var]
 
@@ -44,10 +47,13 @@ def load_nc(file):
     except:
         return None
 
+# =========================
+# DATA
+# =========================
 if uploaded_file:
     df = load_nc(uploaded_file)
 else:
-    st.warning("Menggunakan data simulasi")
+    st.info("Menggunakan data simulasi")
     df = pd.DataFrame({
         "lat": np.random.uniform(-11, 6, 300),
         "lon": np.random.uniform(95, 141, 300),
@@ -83,66 +89,71 @@ df["status"] = df["score"].apply(classify)
 # ⏱️ WAKTU
 # =========================
 now = datetime.now()
+time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-st.subheader("⏱️ Informasi Waktu")
-st.info(f"Update: {now.strftime('%Y-%m-%d %H:%M:%S')} WIB")
+st.subheader("⏱️ Waktu Observasi")
+st.info(time_str + " WIB")
 
 # =========================
-# STATUS DOMINAN + WAKTU
+# STATUS DOMINAN
 # =========================
 dominant = df["status"].value_counts().idxmax()
 
 st.subheader("🚨 Status Saat Ini")
-st.success(f"{dominant} terjadi pada {now.strftime('%H:%M WIB')}")
+st.success(f"{dominant} (pukul {now.strftime('%H:%M WIB')})")
 
 # =========================
-# RIWAYAT WAKTU STATUS
+# MAP (STABLE)
 # =========================
-st.subheader("📈 Waktu Perubahan Status")
+st.subheader("🗺️ Peta Risiko Cuaca")
 
-history = []
-for i in range(4):
-    waktu = now - timedelta(minutes=(3-i)*10)
-    history.append({
-        "Waktu": waktu.strftime("%H:%M"),
-        "Status": dominant
-    })
+@st.cache_resource
+def create_map(df, time_str):
 
-hist_df = pd.DataFrame(history)
-st.table(hist_df)
+    m = folium.Map(location=[-2,118], zoom_start=5)
 
-# =========================
-# MAP (STABIL)
-# =========================
-st.subheader("🗺️ Peta Risiko")
+    color = {
+        "🟢 Aman":"green",
+        "🟡 Waspada":"orange",
+        "🟠 Siaga":"darkorange",
+        "🔴 Ekstrem":"red"
+    }
 
-m = folium.Map(location=[-2,118], zoom_start=5)
+    # kurangi titik biar mudah diklik
+    df_sample = df.sample(min(len(df), 300))
 
-color = {
-    "🟢 Aman":"green",
-    "🟡 Waspada":"orange",
-    "🟠 Siaga":"darkorange",
-    "🔴 Ekstrem":"red"
-}
+    for _, r in df_sample.iterrows():
+        folium.CircleMarker(
+            [r["lat"], r["lon"]],
+            radius=5,
+            color=color[r["status"]],
+            fill=True,
+            fill_opacity=0.7,
+            popup=f"""
+            <b>Status:</b> {r['status']}<br>
+            <b>Waktu:</b> {time_str}<br>
+            <b>Score:</b> {r['score']:.2f}
+            """
+        ).add_to(m)
 
-for _, r in df.iterrows():
-    folium.CircleMarker(
-        [r["lat"], r["lon"]],
-        radius=5,
-        color=color[r["status"]],
-        fill=True,
-        fill_opacity=0.7,
-        popup=f"""
-        Status: {r['status']}<br>
-        Waktu: {now.strftime('%H:%M')}<br>
-        Score: {r['score']:.2f}
-        """
-    ).add_to(m)
+    return m
 
-st_folium(m, width=1100, height=500)
+map_object = create_map(df, time_str)
+st_folium(map_object, width=1100, height=500)
 
 # =========================
-# DATA
+# DATA RINGKAS
 # =========================
-st.subheader("📊 Data")
-st.dataframe(df.head(100))
+st.subheader("📊 Ringkasan Data")
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Data", len(df))
+col2.metric("Ekstrem", (df["status"]=="🔴 Ekstrem").sum())
+col3.metric("Siaga", (df["status"]=="🟠 Siaga").sum())
+col4.metric("Aman", (df["status"]=="🟢 Aman").sum())
+
+# =========================
+# TABLE (OPSIONAL)
+# =========================
+with st.expander("📋 Lihat Data Detail"):
+    st.dataframe(df.head(100))
