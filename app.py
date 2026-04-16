@@ -6,12 +6,12 @@ import json
 import streamlit.components.v1 as components
 from datetime import datetime
 
-# OPTIONAL (AMAN)
 try:
     from shapely.geometry import shape, Point
     SHAPELY_AVAILABLE = True
 except:
     SHAPELY_AVAILABLE = False
+
 
 # =========================
 # CONFIG
@@ -20,7 +20,7 @@ st.set_page_config(layout="wide")
 st.title("SkyAlert – Early Warning System")
 
 # =========================
-# LOAD GEOJSON (SAFE)
+# LOAD GEOJSON
 # =========================
 @st.cache_data
 def load_geojson():
@@ -38,18 +38,19 @@ geojson_data = load_geojson()
 @st.cache_data
 def get_province(lat, lon):
     if geojson_data is None or not SHAPELY_AVAILABLE:
-        return "Indonesia"
+        return "Indonesia - Region Unknown"
 
     try:
         point = Point(lon, lat)
         for feature in geojson_data["features"]:
             polygon = shape(feature["geometry"])
             if polygon.contains(point):
-                return feature["properties"].get("name", "Unknown")
+                return feature["properties"].get("name", "Unknown Province")
     except:
-        return "Indonesia"
+        return "Indonesia - Region Unknown"
 
-    return "Luar Indonesia"
+    return "Indonesia - Outer Area"
+
 
 # =========================
 # DATA
@@ -79,11 +80,18 @@ df["score"] = (
     0.1 * norm(df["rain"], 0, 100)
 )
 
+# =========================
+# CLASSIFICATION (ILMIAH)
+# =========================
 def classify(s):
-    if s < 0.3: return "Aman"
-    elif s < 0.6: return "Waspada"
-    elif s < 0.8: return "Siaga"
-    else: return "Ekstrem"
+    if s < 0.30:
+        return "Aman"
+    elif s < 0.60:
+        return "Waspada"
+    elif s < 0.80:
+        return "Siaga"
+    else:
+        return "Ekstrem"
 
 df["status"] = df["score"].apply(classify)
 
@@ -96,17 +104,17 @@ df_sample["province"] = df_sample.apply(
 )
 
 # =========================
-# EXPLANATION BERDASARKAN STATUS
+# EXPLANATION (ILMIAH FIX)
 # =========================
-def explain_status(r):
+def explain(r):
     if r["status"] == "Ekstrem":
-        return "CAPE > 2500 dan CTT < -70°C menunjukkan awan Cumulonimbus kuat dan atmosfer sangat labil"
+        return "CAPE > 2500 J/kg dan CTT < -70°C → atmosfer sangat labil, Cumulonimbus aktif"
     elif r["status"] == "Siaga":
-        return "CAPE > 1500 dan CTT < -60°C menunjukkan konveksi kuat berpotensi hujan lebat"
+        return "CAPE 1500–2500 J/kg → konveksi kuat, potensi hujan lebat"
     elif r["status"] == "Waspada":
-        return "CAPE > 500 menunjukkan awal pertumbuhan awan konvektif"
+        return "CAPE 500–1500 J/kg → awal pembentukan awan konvektif"
     else:
-        return "Atmosfer relatif stabil dengan energi konveksi rendah"
+        return "Atmosfer stabil, konveksi lemah"
 
 # =========================
 # WAKTU
@@ -114,7 +122,7 @@ def explain_status(r):
 now = datetime.now()
 time_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-st.info(f"Waktu observasi: {time_str} WIB")
+st.info(f"Waktu Observasi: {time_str} WIB")
 
 # =========================
 # LEGENDA
@@ -124,8 +132,8 @@ st.subheader("Legenda Status")
 col1, col2, col3, col4 = st.columns(4)
 col1.markdown("Aman – atmosfer stabil")
 col2.markdown("Waspada – awal konveksi")
-col3.markdown("Siaga – potensi hujan lebat")
-col4.markdown("Ekstrem – badai / CB kuat")
+col3.markdown("Siaga – hujan lebat berpotensi")
+col4.markdown("Ekstrem – badai Cumulonimbus aktif")
 
 # =========================
 # MAP (STATIC)
@@ -150,15 +158,14 @@ def create_map(df):
             fill=True,
             fill_opacity=0.7,
             popup=f"""
-            Lokasi: {r['province']}<br>
-            Koordinat: {r['lat']:.2f}, {r['lon']:.2f}<br>
+            Provinsi: {r['province']}<br>
+            Koordinat: {r['lat']:.3f}, {r['lon']:.3f}<br>
             Status: {r['status']}<br>
-            Waktu: {time_str}<br>
             Score: {r['score']:.2f}<br>
             CAPE: {r['cape']:.0f} J/kg<br>
             CTT: {r['ctt']:.1f} °C<br><br>
-            Keterangan:<br>
-            {explain_status(r)}
+            Alasan:<br>
+            {explain(r)}
             """
         ).add_to(m)
 
@@ -169,13 +176,11 @@ components.html(create_map(df_sample), height=520)
 # =========================
 # DATA TABLE
 # =========================
-st.subheader("Data Detail")
+st.subheader("Data Detail Lokasi")
 
 df_display = df_sample[[
     "province", "lat", "lon", "status", "score", "cape", "ctt", "rh", "rain"
-]].copy()
-
-df_display = df_display.sort_values("score", ascending=False)
+]].sort_values("score", ascending=False)
 
 st.dataframe(df_display, use_container_width=True)
 
@@ -185,7 +190,7 @@ st.dataframe(df_display, use_container_width=True)
 st.subheader("Ringkasan")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Total Data", len(df))
+col1.metric("Total", len(df))
 col2.metric("Ekstrem", (df["status"]=="Ekstrem").sum())
 col3.metric("Siaga", (df["status"]=="Siaga").sum())
 col4.metric("Aman", (df["status"]=="Aman").sum())
