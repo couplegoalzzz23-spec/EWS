@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import folium
 import xarray as xr
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 from datetime import datetime
 
 # =========================
@@ -103,13 +103,11 @@ st.subheader("🚨 Status Saat Ini")
 st.success(f"{dominant} (pukul {now.strftime('%H:%M WIB')})")
 
 # =========================
-# MAP (STABLE)
+# MAP (STATIC - NO MOVEMENT)
 # =========================
-st.subheader("🗺️ Peta Risiko Cuaca")
+st.subheader("🗺️ Peta Risiko Cuaca (Stabil & Bisa Diklik)")
 
-@st.cache_resource
 def create_map(df, time_str):
-
     m = folium.Map(location=[-2,118], zoom_start=5)
 
     color = {
@@ -119,7 +117,6 @@ def create_map(df, time_str):
         "🔴 Ekstrem":"red"
     }
 
-    # kurangi titik biar mudah diklik
     df_sample = df.sample(min(len(df), 300))
 
     for _, r in df_sample.iterrows():
@@ -132,19 +129,22 @@ def create_map(df, time_str):
             popup=f"""
             <b>Status:</b> {r['status']}<br>
             <b>Waktu:</b> {time_str}<br>
-            <b>Score:</b> {r['score']:.2f}
+            <b>Score:</b> {r['score']:.2f}<br>
+            CAPE: {r['cape']:.0f}<br>
+            CTT: {r['ctt']:.1f}°C
             """
         ).add_to(m)
 
-    return m
+    return m._repr_html_()
 
-map_object = create_map(df, time_str)
-st_folium(map_object, width=1100, height=500)
+map_html = create_map(df, time_str)
+
+components.html(map_html, height=520)
 
 # =========================
-# DATA RINGKAS
+# RINGKASAN
 # =========================
-st.subheader("📊 Ringkasan Data")
+st.subheader("📊 Ringkasan")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total Data", len(df))
@@ -153,7 +153,7 @@ col3.metric("Siaga", (df["status"]=="🟠 Siaga").sum())
 col4.metric("Aman", (df["status"]=="🟢 Aman").sum())
 
 # =========================
-# TABLE (OPSIONAL)
+# DATA
 # =========================
-with st.expander("📋 Lihat Data Detail"):
+with st.expander("📋 Lihat Data"):
     st.dataframe(df.head(100))
