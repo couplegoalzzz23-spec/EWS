@@ -5,7 +5,7 @@ import folium
 import xarray as xr
 from streamlit_folium import st_folium
 
-# OPTIONAL IMPORT (ANTI ERROR)
+# optional (biar tidak error kalau belum install)
 try:
     import requests
     from PIL import Image
@@ -15,7 +15,7 @@ except:
     IMG_OK = False
 
 # =========================
-# ⚙️ CONFIG
+# CONFIG
 # =========================
 st.set_page_config(page_title="SkyAlert - EWS", layout="wide")
 
@@ -23,7 +23,7 @@ st.title("🌩️ SkyAlert – Early Warning System")
 st.caption("Explainable Satellite-Based Meteorological EWS | Resti Maulina C.C")
 
 # =========================
-# 📘 SIDEBAR LEGEND
+# SIDEBAR LEGEND
 # =========================
 st.sidebar.header("📘 Legenda")
 
@@ -54,16 +54,17 @@ if IMG_OK:
         st.image(img, use_container_width=True)
     except:
         st.warning("⚠️ Gagal load citra BMKG")
-else:
-    st.info("ℹ️ Library gambar tidak tersedia")
 
 # =========================
-# 📦 LOAD NETCDF
+# 📦 LOAD NETCDF (UPLOAD / FILE / FALLBACK)
 # =========================
-@st.cache_data(ttl=600)
-def load_nc():
+st.subheader("📦 Data NetCDF")
+
+uploaded_file = st.file_uploader("Upload file NetCDF (.nc)", type=["nc"])
+
+def load_nc(file):
     try:
-        ds = xr.open_dataset("H09_B07_Indonesia_202604140020.nc")
+        ds = xr.open_dataset(file)
 
         var_name = list(ds.data_vars)[0]
         data = ds[var_name]
@@ -90,51 +91,41 @@ def load_nc():
             "cloud_top_temp": tbb.flatten()
         }).dropna()
 
-        # parameter turunan
-        df["cape"] = np.interp(df["cloud_top_temp"], [-80, 20], [3000, 100])
-        df["humidity"] = np.interp(df["cloud_top_temp"], [-80, 20], [95, 40])
-        df["rain_rate"] = np.interp(df["cloud_top_temp"], [-80, 20], [100, 0])
-
-        if len(df) > 2500:
-            df = df.sample(2500, random_state=42)
-
         return df
 
     except Exception as e:
-        st.error(f"❌ NetCDF error: {e}")
+        st.error(f"❌ Gagal baca NetCDF: {e}")
         return None
 
-df = load_nc()
-if df is None:
-    st.stop()
+# =========================
+# DATA HANDLING (ANTI ERROR)
+# =========================
+if uploaded_file is not None:
+    df = load_nc(uploaded_file)
+
+else:
+    st.warning("⚠️ Tidak ada file → menggunakan data simulasi")
+    df = pd.DataFrame({
+        "lat": np.random.uniform(-11, 6, 500),
+        "lon": np.random.uniform(95, 141, 500),
+        "cloud_top_temp": np.random.uniform(-80, 10, 500)
+    })
 
 # =========================
-# 🎈 RASON AUTO (SAFE)
+# PARAMETER TURUNAN
 # =========================
-st.subheader("🎈 Radiosonde (Estimasi Operasional)")
-
-def get_rason():
-    try:
-        cape = float(np.mean(df["cape"]))
-        li = - (cape / 1000)
-        return cape, li
-    except:
-        return 1000, -2
-
-cape_real, li_real = get_rason()
-
-c1, c2 = st.columns(2)
-c1.metric("CAPE (J/kg)", f"{cape_real:.0f}")
-c2.metric("Lifted Index", f"{li_real:.1f}")
+df["cape"] = np.interp(df["cloud_top_temp"], [-80, 20], [3000, 100])
+df["humidity"] = np.interp(df["cloud_top_temp"], [-80, 20], [95, 40])
+df["rain_rate"] = np.interp(df["cloud_top_temp"], [-80, 20], [100, 0])
 
 # =========================
-# 🧮 NORMALISASI
+# NORMALISASI
 # =========================
 def norm(x, a, b):
     return np.clip((x - a) / (b - a), 0, 1)
 
 # =========================
-# ⚡ SCORING
+# SCORING
 # =========================
 df["score"] = (
     0.4 * norm(df["cape"], 0, 4000) +
@@ -144,7 +135,7 @@ df["score"] = (
 )
 
 # =========================
-# 🚨 STATUS
+# CLASSIFICATION
 # =========================
 def classify(s):
     if s < 0.30:
@@ -159,7 +150,7 @@ def classify(s):
 df["status"] = df["score"].apply(classify)
 
 # =========================
-# 🧠 EXPLAIN
+# EXPLAIN
 # =========================
 def explain(r):
     alasan = []
@@ -176,19 +167,19 @@ def explain(r):
     return alasan
 
 # =========================
-# 📊 METRICS
+# METRICS
 # =========================
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric("Total", len(df))
+col1.metric("Total Data", len(df))
 col2.metric("Ekstrem", (df["status"]=="🔴 Ekstrem").sum())
 col3.metric("Siaga", (df["status"]=="🟠 Siaga").sum())
 col4.metric("Aman", (df["status"]=="🟢 Aman").sum())
 
 # =========================
-# 🗺️ MAP
+# MAP
 # =========================
-st.subheader("🗺️ Peta Risiko")
+st.subheader("🗺️ Peta Risiko Cuaca")
 
 m = folium.Map(location=[-2,118], zoom_start=5)
 
@@ -212,26 +203,26 @@ for _, r in df.iterrows():
         CAPE: {r['cape']:.0f}<br>
         CTT: {r['cloud_top_temp']:.1f}°C<br>
         RH: {r['humidity']:.0f}%<br>
-        Rain: {r['rain_rate']:.1f}<br>
+        Rain: {r['rain_rate']:.1f}
         """
     ).add_to(m)
 
 st_folium(m, width=1200, height=520)
 
 # =========================
-# ⏱️ TEMPORAL TRACK
+# TEMPORAL (SIMPLE)
 # =========================
 st.subheader("⏱️ Tren Awan")
 
-trend = df["cloud_top_temp"].rolling(50).mean()
-st.line_chart(trend)
+st.line_chart(df["cloud_top_temp"].rolling(50).mean())
 
 # =========================
-# 📊 TABLE
+# TABLE
 # =========================
 st.subheader("📊 Data Detail")
 
 df["explanation"] = df.apply(explain, axis=1)
+
 st.dataframe(df.sort_values("score", ascending=False), use_container_width=True)
 
 # =========================
