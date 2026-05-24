@@ -1,8 +1,9 @@
 streamlit
-numpy
 pandas
-xarray
-netcdf4
+requests
 folium
 streamlit-folium
-shapely
+Pillow
+siphon
+MetPy
+numpy
